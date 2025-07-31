@@ -1,6 +1,6 @@
 // For format details, see https://aka.ms/devcontainer.json.
 {
-    "name": "msdocs-python-flask-webapp-quickstart",
+    "name": "vr-museum",
     "image": "mcr.microsoft.com/devcontainers/python:3.12-bullseye",
     "features": {
         "ghcr.io/devcontainers/features/azure-cli:latest": {},
