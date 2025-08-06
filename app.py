@@ -1,11 +1,15 @@
 import os
-from flask_cors import CORS
-from flask import Flask, redirect, render_template, request, send_from_directory, url_for, jsonify
+import json
+import urllib.request
+from dotenv import load_dotenv
+from flask import Flask, request, jsonify
 from neo4j import GraphDatabase
+import chromadb
+from openai import AzureOpenAI
+
+load_dotenv()
 
 # ========== Neo4J Utilities ==========
-
-# ========== ChromaDB Utilities ==========
 
 CYPHER_QUERY = """
 MATCH (a:Specimen)
@@ -37,6 +41,9 @@ ORDER BY score DESC
 LIMIT 5
 """
 
+# ========== ChromaDB Utilities ==========
+
+
 # ========== Main Resources ==========
 
 class Recommender:
@@ -49,30 +56,61 @@ class Recommender:
             uri=os.getenv('NEO4J_URI'), 
             auth=(os.getenv('NEO4J_USERNAME'), os.getenv('NEO4J_PASSWORD'))
         )
-        self.chromadb_client = None
+        self.chromadb_client = chromadb.CloudClient(
+            api_key=os.getenv('CHROMA_API_KEY'),
+            tenant=os.getenv('CHROMA_TENANT'),
+            database=os.getenv('CHROMA_DATABASE')
+        )
+        self.azure_client  = AzureOpenAI(
+            api_key=os.getenv('AZURE_OPENAI_API_KEY'),
+            api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
+            azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT')
+        )
+        self.embedding_model = 'text-embedding-3-large'
 
     def graph_query(self, specimen_name):
         """Queries the Neo4J database to obtain recommendations"""
         with self.neo4j_client.session() as session:
             result = session.run(CYPHER_QUERY, specimen_name=specimen_name)
-            return [record["recommended_name"] for record in result]
+        recommended_speciments = [record["recommended_name"] for record in result]
+        return recommended_speciments
+        
         
     def semantic_query(self, query):
         """Queries the ChromaDB database to obtain similar results"""
-        return # TODO: To be implemented
+        specimens = self.chromadb_client.get_collection('specimens')
+        embeddings = self.get_embeddings(text=query)
+        results = specimens.query(query_embeddings=embeddings)
+        recommended_specimens = [metadata['specimen_name'] for metadata in results['metadatas'][0][:5]]
+        return recommended_specimens
+    
+    def get_embeddings(self, text: str):
+        """Gets embeddings from Azure OpenAI"""
+        response = self.azure_client.embeddings.create(input=text, model=self.embedding_model, dimensions=1024)
+        embeddings = response.data[0].embedding
+        return embeddings
 
-# Initialize app and recommender
-app = Flask(__name__)
-CORS(app)
 recommender = Recommender()
+app = Flask(__name__)
 
-@app.route('/recommend_by_name', methods=['GET'])
-def recommend_by_name():
+@app.route('/graph_recommend', methods=['GET'])
+def graph_recommend():
     specimen_name = request.args.get('specimen_name')
     if not specimen_name:
-        return jsonify({'error': 'No query parameter provided'}), 400
+        return jsonify({'error': 'No "specimen_name" parameter provided'}), 400
     try:
         recommendations = recommender.graph_query(specimen_name=specimen_name)
+        return jsonify({'recommendations': recommendations})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/semantic_recommend', methods=['GET'])
+def semantic_recommend():
+    query = request.args.get('query')
+    if not query:
+        return jsonify({'error': 'No "query" parameter provided'}), 400
+    try:
+        recommendations = recommender.semantic_query(query=query)
         return jsonify({'recommendations': recommendations})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
