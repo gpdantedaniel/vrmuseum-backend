@@ -72,7 +72,7 @@ class Recommender:
         """Queries the Neo4J database to obtain recommendations"""
         with self.neo4j_client.session() as session:
             result = session.run(CYPHER_QUERY, specimen_name=specimen_name)
-        recommended_speciments = [record["recommended_name"] for record in result]
+            recommended_speciments = [record["recommended_name"] for record in result]
         return recommended_speciments
         
         

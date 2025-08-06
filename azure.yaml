@@ -1,6 +1,0 @@
-name: vrmuseum-backend
-services:
-  web:
-    project: .
-    language: python
-    host: appservice
