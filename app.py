@@ -41,8 +41,20 @@ ORDER BY score DESC
 LIMIT 5
 """
 
-# ========== ChromaDB Utilities ==========
+# ========== Prompts ==========
 
+SUMMARIZE_PROMPT = """A user is searching in a virtual museum. 
+The user asked the following search query: {query}
+Here are the results that were retrieved: {retrieval}
+Generate a friendly sentence that acknowledges the query 
+and reminds the user of what they might be interested in."""
+
+RESULT_PROMPT = """A user is searching in a virtual museum. 
+The user asked the following search query: {query}
+A result was retrieved: {title}
+Here is its information: {content}
+Describe the result briefly and cheerfully.
+Justify the result's relevance briefly."""
 
 # ========== Main Resources ==========
 
@@ -75,20 +87,66 @@ class Recommender:
             recommended_speciments = [record["recommended_name"] for record in result]
         return recommended_speciments
         
-        
     def semantic_query(self, query):
         """Queries the ChromaDB database to obtain similar results"""
+        # Step 1. Get the results for the query
         specimens = self.chromadb_client.get_collection('specimens')
         embeddings = self.get_embeddings(text=query)
         results = specimens.query(query_embeddings=embeddings)
-        recommended_specimens = [metadata['specimen_name'] for metadata in results['metadatas'][0][:5]]
-        return recommended_specimens
+
+        # Step 2. Parse the data and get the top 5
+        contents = results['documents'][0][:5]
+        metadatas = results['metadatas'][0][:5]
+
+        # Step 3. Generate a descriptor of the results
+        general_message = self.describe_results(query, contents)
+
+        # Step 4. List recommendations with additional generated metadata
+        recommendations = [] 
+              
+        for content, metadata in zip(contents, metadatas):
+            identifier, title = metadata['specimen_name'], metadata['title']
+            description, justification = self.describe_result(query, title, content)
+            recommendations.append({
+                'identifier': identifier,
+                'name': title,
+                'description': description,
+                'justification': justification
+            })
+
+        return general_message, recommendations
     
     def get_embeddings(self, text: str):
         """Gets embeddings from Azure OpenAI"""
         response = self.azure_client.embeddings.create(input=text, model=self.embedding_model, dimensions=1024)
         embeddings = response.data[0].embedding
         return embeddings
+    
+    def describe_results(self, query, contents):
+        """Generates a fun description of search results"""
+        retrieval = '\n\n'.join(contents)
+        prompt = SUMMARIZE_PROMPT.format(query=query, retrieval=retrieval)
+        response = self.azure_client.chat.completions.create(
+            model='gpt-4o-mini',
+            messages=[{'role': 'user', 'content': prompt}]
+        )
+        descriptor = response.choices[0].message.content
+        return descriptor
+
+    def describe_result(self, query, title, content):
+        """Generates a description and a justification for a result"""
+        prompt = RESULT_PROMPT.format(query=query, title=title, content=content)
+        response = self.azure_client.chat.completions.create(
+            model='gpt-4o-mini',
+            response_format={'type': 'json_object'},
+            messages=[
+                {'role': 'system', 'content': 'Output your JSON result as follows: {"description": your_description, "justification": your_justification}'},
+                {'role': 'user', 'content': prompt}
+            ]
+        )
+
+        result = json.loads(response.choices[0].message.content)
+        return result['description'], result['justification']
 
 recommender = Recommender()
 app = Flask(__name__)
@@ -110,8 +168,11 @@ def semantic_recommend():
     if not query:
         return jsonify({'error': 'No "query" parameter provided'}), 400
     try:
-        recommendations = recommender.semantic_query(query=query)
-        return jsonify({'recommendations': recommendations})
+        general_message, recommendations = recommender.semantic_query(query=query)
+        return jsonify({
+            'general_message': general_message,
+            'recommendations': recommendations
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
