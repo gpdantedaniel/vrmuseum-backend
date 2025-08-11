@@ -46,7 +46,7 @@ LIMIT 5
 SUMMARIZE_PROMPT = """A user is searching in a virtual museum. 
 The user asked the following search query: {query}
 Here are the results that were retrieved: {retrieval}
-Generate a friendly sentence that acknowledges the query 
+Generate a friendly and concise sentence that acknowledges the query 
 and reminds the user of what they might be interested in."""
 
 RESULT_PROMPT = """A user is searching in a virtual museum. 
@@ -94,25 +94,15 @@ class Recommender:
         embeddings = self.get_embeddings(text=query)
         results = specimens.query(query_embeddings=embeddings)
 
-        # Step 2. Parse the data and get the top 5
-        contents = results['documents'][0][:5]
-        metadatas = results['metadatas'][0][:5]
+        # Step 2. Parse the data and get the top 3
+        contents = results['documents'][0][:3]
+        metadatas = results['metadatas'][0][:3]
 
         # Step 3. Generate a descriptor of the results
         general_message = self.describe_results(query, contents)
 
         # Step 4. List recommendations with additional generated metadata
-        recommendations = [] 
-              
-        for content, metadata in zip(contents, metadatas):
-            identifier, title = metadata['specimen_name'], metadata['title']
-            description, justification = self.describe_result(query, title, content)
-            recommendations.append({
-                'identifier': identifier,
-                'name': title,
-                'description': description,
-                'justification': justification
-            })
+        recommendations = [{'identifier': m['specimen_name'], 'name': m['title']} for m in metadatas]
 
         return general_message, recommendations
     
@@ -128,7 +118,8 @@ class Recommender:
         prompt = SUMMARIZE_PROMPT.format(query=query, retrieval=retrieval)
         response = self.azure_client.chat.completions.create(
             model='gpt-4o-mini',
-            messages=[{'role': 'user', 'content': prompt}]
+            messages=[{'role': 'user', 'content': prompt}],
+            max_completion_tokens=66
         )
         descriptor = response.choices[0].message.content
         return descriptor
